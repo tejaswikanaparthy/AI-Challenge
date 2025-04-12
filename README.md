@@ -1,3 +1,4 @@
+# Steps to installation
 cd (folder path)
 python -m venv venv (based on python version installed -  I have used version 3.9)
 source venv/bin/activate
