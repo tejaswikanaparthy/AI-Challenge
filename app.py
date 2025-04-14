@@ -101,7 +101,7 @@ h2.section-title {
 .metric-value {
     font-size: 1.8rem;
     font-weight: 700;
-    color: #1e3a8a;
+    color: #d8f098;
 }
 .metric-value.positive {
     color: #10b981;
@@ -126,9 +126,10 @@ h2.section-title {
     text-decoration: none;
     font-weight: 500;
 }
-.download-btn:hover {
-    background-color: #1e40af;
-}
+#.download-btn:hover {
+#    background-color: #fffff;
+#    color: #1e3a8a
+#}
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -165,6 +166,7 @@ def initialize_session_state():
             'sentiments': [],
             'categories': ['All'],
             'languages': ['All'],
+            'search_query': '',
             'applied': False
         },
         'google_filters': {
@@ -174,12 +176,14 @@ def initialize_session_state():
             'sentiments': [],
             'categories': ['All'],
             'languages': ['All'],
+            'search_query': '',
             'applied': False
         },
         'apple_page': 1,
         'google_page': 1,
         'reviews_per_page': 10,
-        'review_embeddings': None
+        'review_embeddings': None,
+        'last_search_query': {} 
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -361,32 +365,43 @@ def render_dashboard():
             fetch_all_reviews()
 
     if st.session_state.reviews_data is not None and not st.session_state.reviews_data.empty:
-        df = st.session_state.reviews_data
+        df = st.session_state.reviews_data.copy()  # Create a copy to avoid modifying the original
+        logger.info(f"Dashboard rendering: Combined reviews count: {len(df)}, stores: {df['store'].unique()}")
+
+        # Create tabs
         tabs = st.tabs(["Combined", "Apple App Store", "Google Play Store"])
 
+        # Combined Tab
         with tabs[0]:
             st.markdown('<h2 class="section-title">Combined Analytics</h2>', unsafe_allow_html=True)
-            render_metrics(df, "Combined")
-            render_charts(df, "Combined")
+            combined_df = get_filtered_df(df)
+            logger.info(f"Combined tab: {len(combined_df)} reviews, ratings: {combined_df['rating'].value_counts().to_dict()}")
+            render_metrics(combined_df, "Combined")
+            render_charts(combined_df, "Combined")
 
+        # Apple App Store Tab
         with tabs[1]:
-            apple_df = df[df['store'] == 'Apple App Store']
+            apple_df = get_filtered_df(df, "Apple App Store")
             st.markdown('<h2 class="section-title">Apple App Store</h2>', unsafe_allow_html=True)
             if st.session_state.apple_creds_set and not apple_df.empty:
+                logger.info(f"Apple tab: {len(apple_df)} reviews, ratings: {apple_df['rating'].value_counts().to_dict()}")
+                logger.info(f"Processed {len(apple_df)} Apple reviews, next_cursor={st.session_state.apple_next_cursor}, has_more={st.session_state.apple_fetch_more}")
                 render_metrics(apple_df, "Apple App Store")
                 render_charts(apple_df, "Apple App Store")
             else:
                 st.info("No Apple App Store data available.")
 
+        # Google Play Store Tab
         with tabs[2]:
-            google_df = df[df['store'] == 'Google Play Store']
+            google_df = get_filtered_df(df, "Google Play Store")
             st.markdown('<h2 class="section-title">Google Play Store</h2>', unsafe_allow_html=True)
             if st.session_state.google_creds_set and not google_df.empty:
+                logger.info(f"Google tab: {len(google_df)} reviews, ratings: {google_df['rating'].value_counts().to_dict()}")
+                logger.info(f"Processed {len(google_df)} Google reviews, next_start_index={st.session_state.google_next_start_index}, has_more={st.session_state.google_fetch_more}")
                 render_metrics(google_df, "Google Play Store")
                 render_charts(google_df, "Google Play Store")
             else:
                 st.info("No Google Play Store data available.")
-
     else:
         st.info("No reviews available. Using mock data for demonstration.")
         st.session_state.reviews_data = generate_mock_reviews()
@@ -397,34 +412,16 @@ def render_dashboard():
     st.markdown("---")
     st.markdown("<p style='text-align: center; color: #6b7280;'>Author: Tejaswi Kanaparthi</p>", unsafe_allow_html=True)
 
-def generate_mock_reviews():
-    mock_reviews = [
-        {'review_id': '1', 'user_id': 'user1', 'text': 'App crashes often, very frustrating.', 'rating': 2, 'date': '2025-04-01T10:00:00Z', 'store': 'Google Play Store'},
-        {'review_id': '2', 'user_id': 'user2', 'text': 'Great UI but slow performance.', 'rating': 3, 'date': '2025-04-02T12:00:00Z', 'store': 'Apple App Store'},
-        {'review_id': '3', 'user_id': 'user3', 'text': 'Love the new features!', 'rating': 5, 'date': '2025-04-03T14:00:00Z', 'store': 'Google Play Store'},
-        {'review_id': '4', 'user_id': 'user4', 'text': 'Login issues persist.', 'rating': 1, 'date': '2025-04-04T16:00:00Z', 'store': 'Apple App Store'},
-        {'review_id': '5', 'user_id': 'user5', 'text': 'Smooth experience, highly recommend.', 'rating': 4, 'date': '2025-04-05T18:00:00Z', 'store': 'Google Play Store'},
-    ]
-    df = pd.DataFrame(mock_reviews)
-    df['date'] = pd.to_datetime(df['date'], utc=True)
-    df['sentiment_analysis'] = df['text'].apply(analyze_sentiment)
-    df['sentiment'] = df['sentiment_analysis'].apply(lambda x: x['sentiment'])
-    df['polarity'] = df['sentiment_analysis'].apply(lambda x: x['polarity'])
-    df['emotions'] = df['sentiment_analysis'].apply(lambda x: x['emotions'])
-    df['category_analysis'] = df.apply(lambda x: categorize_review(x['text'], x['sentiment']), axis=1)
-    df['category'] = df['category_analysis'].apply(lambda x: x['category'])
-    df['category_confidence'] = df['category_analysis'].apply(lambda x: x['confidence'])
-    df['language'] = df['text'].apply(detect_language)
-    df['response_status'] = 'pending'
-    df['hallucination_detected'] = False
-    df['hallucination_feedback'] = False
-    update_faiss_index(df)
-    return df
 
 def render_metrics(df, store_name):
     if df.empty:
         st.warning(f"No data available for {store_name} metrics.")
         return
+    
+    logger.info(f"Rendering metrics for {store_name}, review count: {len(df)}, stores: {df['store'].unique()}")
+    logger.info(f"Rating distribution: {df['rating'].value_counts().to_dict()}")
+    logger.info(f"Sentiment distribution: {df['sentiment'].value_counts().to_dict()}")
+    
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
@@ -443,9 +440,21 @@ def render_metrics(df, store_name):
         st.markdown('</div>', unsafe_allow_html=True)
     with col4:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        hallucination_rate = df['hallucination_detected'].mean() * 100 if 'hallucination_detected' in df and not df.empty else 0
+        hallucination_rate = 0
+        if 'hallucination_detected' in df.columns and not df.empty:
+            try:
+                hallucination_col = df['hallucination_detected']
+                if hallucination_col.dtype == bool:
+                    hallucination_rate = hallucination_col.mean() * 100
+                else:
+                    hallucination_rate = pd.to_numeric(hallucination_col, errors='coerce').fillna(0).mean() * 100
+                logger.info(f"Calculated hallucination rate: {hallucination_rate}")
+            except Exception as e:
+                logger.error(f"Error calculating hallucination rate: {e}")
+                hallucination_rate = 0
         st.markdown(f'<div class="metric-value">{hallucination_rate:.1f}%</div><div class="metric-label">Hallucination Rate</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+        
     with col5:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         similar_reviews_count = 0
@@ -454,6 +463,53 @@ def render_metrics(df, store_name):
             similar_reviews_count = len(similar_reviews)
         st.markdown(f'<div class="metric-value">{similar_reviews_count}</div><div class="metric-label">Similar Reviews</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+ 
+
+def categorize_review(review_text, sentiment):
+    try:
+        review_text = review_text.lower().strip() if review_text else ""
+        if not review_text:
+            return {'category': 'general', 'confidence': 0.5}
+        
+        # Define keyword-based rules for categories
+        categories = {
+            'performance': ['crash', 'slow', 'fast', 'lag', 'performance', 'speed'],
+            'usability': ['easy', 'hard', 'intuitive', 'confusing', 'interface', 'ui', 'user-friendly'],
+            'features': ['feature', 'function', 'option', 'tool', 'capability'],
+            'bugs': ['bug', 'glitch', 'error', 'issue', 'problem'],
+            'login': ['login', 'sign-in', 'authentication', 'account'],
+            'general': []
+        }
+        
+        # Score categories based on keyword matches
+        category_scores = {cat: 0 for cat in categories}
+        for category, keywords in categories.items():
+            for keyword in keywords:
+                if keyword in review_text:
+                    category_scores[category] += 1
+        
+        # Adjust scores based on sentiment
+        if sentiment == 'negative':
+            category_scores['bugs'] += 1
+            category_scores['performance'] += 0.5
+        elif sentiment == 'positive':
+            category_scores['usability'] += 0.5
+            category_scores['features'] += 0.5
+        
+        # Find the category with the highest score
+        max_score = max(category_scores.values())
+        if max_score == 0:
+            selected_category = 'general'
+            confidence = 0.5
+        else:
+            selected_category = max(category_scores, key=category_scores.get)
+            confidence = min(0.9, max_score / (max_score + 1))
+        
+#        logger.info(f"Categorized review: text='{review_text[:50]}...', sentiment={sentiment}, category={selected_category}, confidence={confidence}")
+        return {'category': selected_category, 'confidence': confidence}
+    except Exception as e:
+        logger.error(f"Error categorizing review: {e}")
+        return {'category': 'general', 'confidence': 0.5}
 
 def render_charts(df, store_name):
     if df.empty or 'text' not in df:
@@ -510,17 +566,62 @@ def render_charts(df, store_name):
     col5 = st.columns(1)[0]
     with col5:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        all_emotions = []
-        if 'emotions' in df:
-            for emotions_dict in df['emotions']:
-                if isinstance(emotions_dict, dict):
-                    all_emotions.extend([(emotion, score) for emotion, score in emotions_dict.items()])
-        top_emotion = max(Counter([e[0] for e in all_emotions]).items(), key=lambda x: x[1])[0] if all_emotions else 'N/A'
+        sentiment_counts = df['sentiment'].value_counts()
+        review_count = len(df)
+        positive_pct = sentiment_counts.get('positive', 0) / review_count if review_count else 0
+        negative_pct = sentiment_counts.get('negative', 0) / review_count if review_count else 0
+        neutral_pct = sentiment_counts.get('neutral', 0) / review_count if review_count else 0
+        
+        logger.info(f"{store_name} sentiment percentages: positive={positive_pct:.2%}, negative={negative_pct:.2%}, neutral={neutral_pct:.2%}")
+        
+        # Initialize emotion weights
+        emotion_weights = {
+            'happy': 0.0,
+            'satisfied': 0.0,
+            'frustrated': 0.0,
+            'angry': 0.0,
+            'sad': 0.0,
+            'disappointed': 0.0,
+            'neutral': 0.0
+        }
+        
+        # Assign weights based on sentiment percentages and store
+        if store_name == 'Apple App Store':
+            # Apple: Negative leans toward frustrated/angry, positive toward happy
+            emotion_weights['frustrated'] += negative_pct * 0.6
+            emotion_weights['angry'] += negative_pct * 0.4
+            emotion_weights['happy'] += positive_pct * 0.7
+            emotion_weights['satisfied'] += positive_pct * 0.3
+            emotion_weights['neutral'] += neutral_pct
+        elif store_name == 'Google Play Store':
+            # Google: Negative leans toward sad/disappointed, positive toward happy/satisfied
+            emotion_weights['sad'] += negative_pct * 0.6
+            emotion_weights['disappointed'] += negative_pct * 0.4
+            emotion_weights['happy'] += positive_pct * 0.6
+            emotion_weights['satisfied'] += positive_pct * 0.4
+            emotion_weights['neutral'] += neutral_pct
+        else:  # Combined
+            # Combined: Balanced mix
+            emotion_weights['frustrated'] += negative_pct * 0.4
+            emotion_weights['sad'] += negative_pct * 0.3
+            emotion_weights['angry'] += negative_pct * 0.2
+            emotion_weights['disappointed'] += negative_pct * 0.1
+            emotion_weights['happy'] += positive_pct * 0.5
+            emotion_weights['satisfied'] += positive_pct * 0.5
+            emotion_weights['neutral'] += neutral_pct
+        
+        # Find dominant emotion
+        top_emotion = max(emotion_weights.items(), key=lambda x: x[1])[0] if any(emotion_weights.values()) else 'neutral'
+        top_emotion = top_emotion.capitalize()
+        
+#        logger.info(f"Emotion weights for {store_name}: {emotion_weights}")
+#        logger.info(f"Top emotion for {store_name}: {top_emotion}")
+        
         st.markdown(f'<div class="metric-value">{top_emotion}</div><div class="metric-label">Dominant Emotion</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     summary = get_review_summary(df)
-    logger.info(f"Summary for {store_name}: {summary}")
+#    logger.info(f"Summary for {store_name}: {summary}")
     col3, col4 = st.columns(2)
     with col3:
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -634,24 +735,45 @@ def render_review_management():
 def render_store_reviews(df, store_name, filters):
     if df.empty:
         st.warning(f"No reviews available for {store_name}.")
+        logger.warning(f"No reviews available for {store_name} in render_store_reviews")
         return
 
     st.markdown(f'<h2 class="section-title">{store_name}</h2>', unsafe_allow_html=True)
     st.markdown('<div class="filter-section">', unsafe_allow_html=True)
     
-    with st.expander("Filters", expanded=not filters['applied']):
-        col1, col2 = st.columns(2)
-        with col1:
-            date_key = f"{store_name}_date_range"
-            date_value = filters['date_range'] if filters['date_range'] else None
-            date_range = st.date_input(
-                "Date Range",
-                value=date_value,
-                min_value=(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=365)).date(),
-                max_value=datetime.datetime.now(datetime.timezone.utc).date(),
-                key=date_key
+    with st.expander("Filters", expanded=(not filters['applied'])):
+        # First row - Dates and Rating
+        date_col1, date_col2, rating_col = st.columns([1, 1, 2])
+        
+        # Define min and max dates
+        min_date = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=365)).date()
+        max_date = datetime.datetime.now(datetime.timezone.utc).date()
+        # Get stored date values
+        stored_range = filters.get('date_range', ())
+        start_date_default = stored_range[0] if stored_range and len(stored_range) == 2 else None
+        end_date_default = stored_range[1] if stored_range and len(stored_range) == 2 else None
+        
+        # Date range inputs
+        with date_col1:
+            start_date = st.date_input(
+                "Start Date",
+                value=start_date_default,
+                min_value=min_date,
+                max_value=max_date,
+                key=f"{store_name}_start_date"
             )
-        with col2:
+        
+        with date_col2:
+            end_date = st.date_input(
+                "End Date",
+                value=end_date_default,
+                min_value=start_date if start_date else min_date,
+                max_value=max_date,
+                key=f"{store_name}_end_date"
+            )
+        
+        # Rating range
+        with rating_col:
             rating_range = st.slider(
                 "Rating Range",
                 min_value=1,
@@ -660,16 +782,17 @@ def render_store_reviews(df, store_name, filters):
                 key=f"{store_name}_rating_range"
             )
             min_rating, max_rating = rating_range
-
-        col3, col4 = st.columns(2)
-        with col3:
+        
+        # Second row - Sentiment and Categories
+        col1, col2 = st.columns(2)
+        with col1:
             sentiments = st.multiselect(
                 "Sentiment",
                 options=['positive', 'negative', 'neutral'],
                 default=filters['sentiments'],
                 key=f"{store_name}_sentiments"
             )
-        with col4:
+        with col2:
             unique_categories = ['All'] + sorted(df['category'].dropna().unique().tolist())
             categories = st.multiselect(
                 "Categories",
@@ -677,9 +800,10 @@ def render_store_reviews(df, store_name, filters):
                 default=filters['categories'],
                 key=f"{store_name}_categories"
             )
-
-        col5, _ = st.columns([1, 1])
-        with col5:
+        
+        # Third row - Languages and Search
+        col3, col4 = st.columns(2)
+        with col3:
             unique_languages = ['All'] + sorted(df['language'].dropna().unique().tolist())
             languages = st.multiselect(
                 "Languages",
@@ -687,23 +811,38 @@ def render_store_reviews(df, store_name, filters):
                 default=filters['languages'],
                 key=f"{store_name}_languages"
             )
-
+        with col4:
+            search_query = st.text_input(
+                "Search Reviews",
+                value=filters.get('search_query', ''),
+                placeholder="e.g., excellent",
+                key=f"{store_name}_search"
+            )
+            logger.info(f"Search query input for {store_name}: '{search_query}'")
+        
+        # Fourth row - Buttons
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("Apply Filters", key=f"{store_name}_apply_filters"):
-                filters.update({
-                    'date_range': date_range if isinstance(date_range, tuple) else (date_range, date_range) if date_range else (),
+                new_filters = {
+                    'date_range': (start_date, end_date) if start_date and end_date else (),
                     'min_rating': min_rating,
                     'max_rating': max_rating,
                     'sentiments': sentiments,
-                    'categories': categories,
-                    'languages': languages,
+                    'categories': categories if categories else ['All'],
+                    'languages': languages if languages else ['All'],
+                    'search_query': search_query.strip(),
                     'applied': True
-                })
-                st.session_state[f"{store_name.lower().replace(' ', '_')}_page"] = 1
-                st.rerun()
+                }
+                if new_filters != filters:
+                    filters.clear()
+                    filters.update(new_filters)
+                    st.session_state[f"{store_name.lower().replace(' ', '_')}_page"] = 1
+                    logger.info(f"Applied filters for {store_name}: {filters}")
+                    st.rerun()
         with col_btn2:
             if st.button("Reset Filters", key=f"{store_name}_reset_filters"):
+                filters.clear()
                 filters.update({
                     'date_range': (),
                     'min_rating': 1,
@@ -711,37 +850,25 @@ def render_store_reviews(df, store_name, filters):
                     'sentiments': [],
                     'categories': ['All'],
                     'languages': ['All'],
+                    'search_query': '',
                     'applied': False
                 })
                 st.session_state[f"{store_name.lower().replace(' ', '_')}_page"] = 1
+                logger.info(f"Reset filters for {store_name}")
                 st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    filtered_df = df.copy()
-    if filters['applied']:
-        if filters['date_range']:
-            start_date, end_date = filters['date_range']
-            start_date = pd.Timestamp(start_date, tz='UTC')
-            end_date = pd.Timestamp(end_date, tz='UTC') + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-            filtered_df = filtered_df[
-                (filtered_df['date'] >= start_date) & (filtered_df['date'] <= end_date)
-            ]
-        filtered_df = filtered_df[
-            (filtered_df['rating'] >= filters['min_rating']) &
-            (filtered_df['rating'] <= filters['max_rating'])
-        ]
-        if filters['sentiments']:
-            filtered_df = filtered_df[filtered_df['sentiment'].isin(filters['sentiments'])]
-        if filters['categories'] and 'All' not in filters['categories']:
-            filtered_df = filtered_df[filtered_df['category'].isin(filters['categories'])]
-        if filters['languages'] and 'All' not in filters['languages']:
-            filtered_df = filtered_df[filtered_df['language'].isin(filters['languages'])]
+    # Apply filters with spinner
+    with st.spinner("Applying filters..."):
+        filtered_df = filter_reviews(df, filters)
 
     if filtered_df.empty:
         st.warning("No reviews match the selected filters.")
+        logger.warning(f"No reviews match filters for {store_name}")
         return
 
+    # Rest of the function remains unchanged
     page_key = f"{store_name.lower().replace(' ', '_')}_page"
     total_pages = max(1, (len(filtered_df) + st.session_state.reviews_per_page - 1) // st.session_state.reviews_per_page)
     current_page = max(1, min(st.session_state.get(page_key, 1), total_pages))
@@ -750,12 +877,15 @@ def render_store_reviews(df, store_name, filters):
     end_idx = start_idx + st.session_state.reviews_per_page
     page_df = filtered_df.iloc[start_idx:end_idx].copy()
 
-#    st.markdown('<div class="card">', unsafe_allow_html=True)
+    logger.info(f"{store_name} rendering: Total reviews={len(filtered_df)}, Page={current_page}/{total_pages}, Showing={len(page_df)} reviews")
+
+    
     st.subheader("Reviews")
 
     if f"{store_name}_response_errors" not in st.session_state:
         st.session_state[f"{store_name}_response_errors"] = {}
 
+    # Bulk generate responses
     if st.button("Bulk Generate Responses", key=f"{store_name}_bulk_generate"):
         with st.spinner("Generating responses for all reviews on this page..."):
             for _, row in page_df.iterrows():
@@ -786,8 +916,16 @@ def render_store_reviews(df, store_name, filters):
                             openai_api_key,
                             faq_csv_path
                         )
+                        # Check for hallucination
+                        hallucination_result = detect_hallucination(response, row['text'], similar_reviews)
                         logger.info(f"Bulk response for {review_id}: {response[:50]}...")
                         st.session_state.responses[response_key] = response or ""
+                        # Update hallucination status
+                        filtered_df.loc[filtered_df['review_id'] == review_id, 'hallucination_detected'] = hallucination_result
+                        st.session_state.reviews_data.loc[
+                            st.session_state.reviews_data['review_id'] == review_id,
+                            'hallucination_detected'
+                        ] = hallucination_result
                     except Exception as e:
                         logger.error(f"Bulk response failed for {review_id}: {e}")
                         st.session_state[f"{store_name}_response_errors"][review_id] = str(e)
@@ -795,6 +933,7 @@ def render_store_reviews(df, store_name, filters):
                         st.session_state.generating_reviews.remove(review_id)
             st.rerun()
 
+    # Render individual reviews
     for _, row in page_df.iterrows():
         rating_display = f"{'⭐' * int(row['rating'])} ({row['rating']}/5)"
         with st.expander(f"Review by {row.get('user_id', 'Anonymous')} ({format_date(row['date'])}) {rating_display}"):
@@ -830,7 +969,7 @@ def render_store_reviews(df, store_name, filters):
                     del st.session_state[f"{store_name}_response_errors"][review_id]
                     st.rerun()
 
-            if response_status == 'pending' and review_id not in st.session_state.generating_reviews:
+            if response_status in ['pending', 'saved'] and review_id not in st.session_state.generating_reviews:
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("Generate AI Response", key=f"gen_{store_name}_{review_id}"):
@@ -844,7 +983,7 @@ def render_store_reviews(df, store_name, filters):
                                 brand_voice = st.session_state.get('brand_voice', 'friendly')
                                 openai_api_key = st.session_state.get('openai_api_key', '')
                                 faq_csv_path = st.session_state.get('faq_csv_path', '')
-                                logger.info(f"Generating for {review_id}: text='{row['text'][:50]}...', sentiment={sentiment}, category={category}, rating={rating}, similar_reviews={len(similar_reviews)}, brand_voice={brand_voice}, api_key_set={bool(openai_api_key)}, faq={faq_csv_path}")
+#                                logger.info(f"Generating for {review_id}: text='{row['text'][:50]}...', sentiment={sentiment}, category={category}, rating={rating}, similar_reviews={len(similar_reviews)}, brand_voice={brand_voice}, api_key_set={bool(openai_api_key)}, faq={faq_csv_path}")
                                 if not row['text']:
                                     raise ValueError("Review text is empty")
                                 if not openai_api_key:
@@ -861,8 +1000,16 @@ def render_store_reviews(df, store_name, filters):
                                 )
                                 if not response:
                                     raise ValueError("Generated response is empty")
+                                # Check for hallucination
+                                hallucination_result = detect_hallucination(response, row['text'], similar_reviews)
                                 logger.info(f"Generated response for {review_id}: {response[:50]}...")
                                 st.session_state.responses[response_key] = response
+                                # Update hallucination status
+                                filtered_df.loc[filtered_df['review_id'] == review_id, 'hallucination_detected'] = hallucination_result
+                                st.session_state.reviews_data.loc[
+                                    st.session_state.reviews_data['review_id'] == review_id,
+                                    'hallucination_detected'
+                                ] = hallucination_result
                                 st.success("Response generated successfully")
                                 if review_id in st.session_state[f"{store_name}_response_errors"]:
                                     del st.session_state[f"{store_name}_response_errors"][review_id]
@@ -878,16 +1025,17 @@ def render_store_reviews(df, store_name, filters):
                         st.session_state.reviews_data.loc[
                             st.session_state.reviews_data['review_id'] == review_id, 'response_status'
                         ] = 'responded'
+                        logger.info(f"Marked review {review_id} as responded for {store_name}")
                         st.rerun()
 
             response_text = st.text_area(
-                "AI-Generated Response" if response_status == 'pending' else "Response",
+                "AI-Generated Response" if response_status in ['pending', 'saved'] else "Response",
                 value=st.session_state.responses.get(response_key, ""),
                 key=f"response_text_{store_name}_{review_id}",
-                disabled=response_status != 'pending'
+                disabled=response_status not in ['pending', 'saved']
             )
 
-            if response_status == 'pending':
+            if response_status in ['pending', 'saved']:
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     if st.button("Save Response", key=f"save_{store_name}_{review_id}"):
@@ -896,6 +1044,8 @@ def render_store_reviews(df, store_name, filters):
                         st.session_state.reviews_data.loc[
                             st.session_state.reviews_data['review_id'] == review_id, 'response_status'
                         ] = 'saved'
+                        st.success("Saved response successfully.")
+                        logger.info(f"Saved response for review {review_id} in {store_name}")
                         st.rerun()
                 with col2:
                     if st.button("Post Response", key=f"post_{store_name}_{review_id}"):
@@ -914,18 +1064,26 @@ def render_store_reviews(df, store_name, filters):
                                 ] = 'posted'
                                 st.session_state.responses[response_key] = response_text
                                 st.success("Response posted successfully.")
+                                logger.info(f"Posted response for review {review_id} in {store_name}")
                             else:
                                 st.error("Failed to post response.")
+                                logger.error(f"Failed to post response for review {review_id} in {store_name}")
                             st.rerun()
                 with col3:
                     if st.button("Flag Response", key=f"flag_{store_name}_{review_id}"):
                         if response_text.strip():
-                            log_flagged_response(review_id, response_text, "Manually flagged")
+                            success = log_flagged_response(review_id, response_text, "Manually flagged")
                             filtered_df.loc[filtered_df['review_id'] == review_id, 'hallucination_detected'] = True
                             st.session_state.reviews_data.loc[
                                 st.session_state.reviews_data['review_id'] == review_id, 'hallucination_detected'
                             ] = True
                             st.warning("Response flagged for review.")
+                            if success:
+                                st.success("Response flagged and saved for review.")
+                                logger.info(f"Flagged response for review {review_id} in {store_name}")
+                            else:
+                                st.error("Response flagged but there was an error saving it.")
+                                logger.error(f"Error saving flagged response for review {review_id} in {store_name}")
                             st.rerun()
 
     st.markdown('<div style="margin-top: 20px;">', unsafe_allow_html=True)
@@ -934,6 +1092,7 @@ def render_store_reviews(df, store_name, filters):
         if current_page > 1:
             if st.button("Previous", key=f"{store_name}_prev"):
                 st.session_state[page_key] = current_page - 1
+                logger.info(f"Navigated to previous page ({current_page - 1}) for {store_name}")
                 st.rerun()
     with col2:
         st.markdown(f"Page {current_page} of {total_pages}")
@@ -941,22 +1100,32 @@ def render_store_reviews(df, store_name, filters):
         if current_page < total_pages:
             if st.button("Next", key=f"{store_name}_next"):
                 st.session_state[page_key] = current_page + 1
+                logger.info(f"Navigated to next page ({current_page + 1}) for {store_name}")
                 st.rerun()
 
-    if store_name == "Google Play Store" and st.session_state.google_fetch_more:
-        if st.button("Load More Google Reviews", key="load_more_google"):
-            with st.spinner("Fetching more Google reviews..."):
-                fetch_all_reviews(google_only=True)
-                st.rerun()
-    elif store_name == "Apple App Store" and st.session_state.apple_fetch_more:
-        if st.button("Load More Apple Reviews", key="load_more_apple"):
-            with st.spinner("Fetching more Apple reviews..."):
-                fetch_all_reviews(apple_only=True)
-                st.rerun()
+#    # Load more reviews
+#    if store_name == "Google Play Store" and st.session_state.google_fetch_more:
+#        if st.button("Load More Google Reviews", key="load_more_google"):
+#            with st.spinner("Fetching more Google reviews..."):
+#                fetch_more_reviews(store_name)
+#                logger.info(f"Triggered load more reviews for Google Play Store")
+#                st.rerun()
+#    elif store_name == "Apple App Store" and st.session_state.apple_fetch_more:
+#        if st.button("Load More Apple Reviews", key="load_more_apple"):
+#            with st.spinner("Fetching more Apple reviews..."):
+#                fetch_more_reviews(store_name)
+#                logger.info(f"Triggered load more reviews for Apple App Store")
+#                st.rerun()
+
+    # Display success message if available
+    success_key = f"{store_name.lower().replace(' ', '_')}_success_message"
+    if success_key in st.session_state:
+        st.success(st.session_state[success_key])
+        logger.info(f"Displayed success message: {st.session_state[success_key]}")
+        del st.session_state[success_key]  # Clear the message after displaying
 
     csv_link = generate_csv_download(filtered_df, f"{store_name}_reviews.csv")
     st.markdown(csv_link, unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 def render_settings():
@@ -974,26 +1143,110 @@ def render_settings():
     st.subheader("FAQ Data")
     st.markdown(f"Status: {'✅ Configured' if st.session_state.get('faq_csv_path') else '⚠️ Not Configured'}")
     
-    st.subheader("FAISS Index")
-    st.markdown(f"Status: {'✅ Active' if faiss_index.ntotal > 0 else '⚠️ Empty'}")
+#    st.subheader("FAISS Index")
+#    st.markdown(f"Status: {'✅ Active' if faiss_index.ntotal > 0 else '⚠️ Empty'}")
+    
+    if st.button("Clear Cache and Reset Data"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.session_state.reviews_data = None
+        st.session_state.responses = {}
+        st.session_state.generating_reviews = set()
+        st.session_state.google_filters = {'applied': False}
+        st.session_state.apple_filters = {'applied': False}
+        st.session_state.google_page = 1
+        st.session_state.apple_page = 1
+        st.success("Cache and data reset! Refreshing...")
+        st.rerun()
     
     st.markdown("---")
     st.markdown("<p style='text-align: center; color: #6b7280;'>Author: Tejaswi Kanaparthi</p>", unsafe_allow_html=True)
 
 def render_flagged_responses():
     st.markdown('<h1 class="dashboard-title">🚩 Flagged Responses</h1>', unsafe_allow_html=True)
-    FLAGGED_RESPONSES_PATH = "flagged_responses.csv"
-    try:
-        if os.path.exists(FLAGGED_RESPONSES_PATH):
-            flagged_df = pd.read_csv(FLAGGED_RESPONSES_PATH)
+    
+    # Path to the CSV file
+    csv_file = os.path.join(os.getcwd(), "flagged_responses.csv")
+    fallback_file = os.path.join(os.getcwd(), "flagged_responses_fallback.csv")
+    
+    # Debug information
+#    st.write(f"Looking for CSV at: {csv_file}")
+#    st.write(f"File exists: {os.path.exists(csv_file)}")
+    
+    if os.path.exists(fallback_file):
+        st.write(f"Fallback file exists: {fallback_file}")
+    
+    # Load data - first try session state
+    flagged_df = None
+    
+    if 'flagged_responses_df' in st.session_state and not st.session_state.flagged_responses_df.empty:
+        flagged_df = st.session_state.flagged_responses_df
+        st.success(f"Loaded {len(flagged_df)} responses from session state")
+    
+    # Then try CSV file if not in session state
+    elif os.path.exists(csv_file):
+        try:
+            flagged_df = pd.read_csv(csv_file)
+            st.success(f"Loaded {len(flagged_df)} responses from CSV file")
+            # Update session state
+            st.session_state.flagged_responses_df = flagged_df
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
+    
+    # Try fallback file if needed
+    elif os.path.exists(fallback_file):
+        try:
+            flagged_df = pd.read_csv(fallback_file)
+            st.success(f"Loaded {len(flagged_df)} responses from fallback file")
+            # Update session state
+            st.session_state.flagged_responses_df = flagged_df
+        except Exception as e:
+            st.error(f"Error reading fallback file: {e}")
+    
+    # If no file exists, create a new empty DataFrame with the expected columns
+    else:
+        # Define the expected columns for flagged responses
+        columns = ['timestamp', 'conversation_id', 'response_id', 'reason', 'notes']
+        flagged_df = pd.DataFrame(columns=columns)
+        
+        # Create and save the empty CSV file
+        try:
+            flagged_df.to_csv(csv_file, index=False)
+            st.success(f"Created new empty CSV file at: {csv_file}")
+            # Update session state
+            st.session_state.flagged_responses_df = flagged_df
+        except Exception as e:
+            st.error(f"Error creating new CSV file: {e}")
+            # Try creating the fallback file if main file creation fails
+            try:
+                flagged_df.to_csv(fallback_file, index=False)
+                st.success(f"Created new empty fallback CSV file at: {fallback_file}")
+                # Update session state
+                st.session_state.flagged_responses_df = flagged_df
+            except Exception as e2:
+                st.error(f"Error creating fallback CSV file: {e2}")
+    
+    # Display data if we have it
+    if flagged_df is not None:
+        st.write("## Flagged Responses")
+        
+        if not flagged_df.empty:
             st.dataframe(flagged_df)
-            fig = px.histogram(flagged_df, x='reason', title="Flagged Response Reasons")
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # Create a chart if we have reason data
+            if 'reason' in flagged_df.columns and not flagged_df['reason'].empty:
+                reason_counts = flagged_df['reason'].value_counts().reset_index()
+                reason_counts.columns = ['Reason', 'Count']
+                
+                fig = px.bar(
+                    reason_counts,
+                    x='Reason',
+                    y='Count',
+                    title="Flagged Response Reasons"
+                )
+                st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No flagged responses yet.")
-    except Exception as e:
-        logger.error(f"Flagged responses error: {e}")
-        st.warning("Unable to display flagged responses.")
+            st.info("No flagged responses yet. Flag responses in the Reviews tab.")
 
 def fetch_all_reviews():
     reviews = []
@@ -1010,7 +1263,7 @@ def fetch_all_reviews():
                 reviews.extend(result['reviews'])
                 st.session_state.google_next_start_index = result.get('next_start_index', 0)
                 st.session_state.google_fetch_more = result.get('has_more', False)
-                logger.info(f"Google fetch: {len(result['reviews'])} reviews")
+                logger.info(f"Google fetch: {len(result['reviews'])} reviews, ratings: {pd.DataFrame(result['reviews'])['rating'].value_counts().to_dict()}")
         except Exception as e:
             logger.error(f"Google reviews fetch error: {e}")
 
@@ -1029,7 +1282,7 @@ def fetch_all_reviews():
                 reviews.extend(result['reviews'])
                 st.session_state.apple_next_cursor = result.get('next_cursor')
                 st.session_state.apple_fetch_more = result.get('has_more', False)
-                logger.info(f"Apple fetch: {len(result['reviews'])} reviews")
+                logger.info(f"Apple fetch: {len(result['reviews'])} reviews, ratings: {pd.DataFrame(result['reviews'])['rating'].value_counts().to_dict()}")
         except Exception as e:
             logger.error(f"Apple reviews fetch error: {e}")
 
@@ -1057,6 +1310,7 @@ def fetch_all_reviews():
     df['response'] = df.get('response', None)
     df['user_id'] = df.get('user_id', 'unknown')
     st.session_state.reviews_data = df
+    logger.info(f"Combined reviews ratings: {df.groupby('store')['rating'].value_counts().to_dict()}")
     update_faiss_index(df)
     return df
 
@@ -1128,32 +1382,175 @@ def fetch_more_reviews(store_name):
 
 def filter_reviews(df, filters):
     if df.empty or not filters.get('applied', False):
+        logger.info("No filters applied or empty DataFrame, returning original")
         return df.copy()
+    
     filtered_df = df.copy()
     try:
-        if len(filters['date_range']) == 2:
+        # Date range filter
+        if len(filters['date_range']) == 2 and all(filters['date_range']):
             start_date, end_date = filters['date_range']
-            start_date = pd.to_datetime(start_date, utc=True)
-            end_date = pd.to_datetime(end_date, utc=True)
-            filtered_df = filtered_df[
-                (filtered_df['date'].dt.date >= start_date.date()) &
-                (filtered_df['date'].dt.date <= end_date.date())
-            ]
+            try:
+                start_date = pd.to_datetime(start_date, utc=True)
+                end_date = pd.to_datetime(end_date, utc=True) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                filtered_df = filtered_df[
+                    (filtered_df['date'].dt.date >= start_date.date()) &
+                    (filtered_df['date'].dt.date <= end_date.date())
+                ]
+                logger.info(f"Date filter applied: {len(filtered_df)} reviews")
+            except Exception as e:
+                logger.warning(f"Date filter error: {e}, skipping date filter")
+        
+        # Rating filter
         if 'rating' in filtered_df:
             filtered_df = filtered_df[
                 (filtered_df['rating'] >= filters['min_rating']) &
                 (filtered_df['rating'] <= filters['max_rating'])
             ]
+            logger.info(f"Rating filter applied: {len(filtered_df)} reviews")
+        
+        # Sentiment filter
         if filters['sentiments']:
             filtered_df = filtered_df[filtered_df['sentiment'].isin(filters['sentiments'])]
-        if 'All' not in filters['categories']:
+            logger.info(f"Sentiment filter applied: {len(filtered_df)} reviews")
+        
+        # Category filter
+        if 'All' not in filters['categories'] and filters['categories']:
             filtered_df = filtered_df[filtered_df['category'].isin(filters['categories'])]
-        if 'All' not in filters['languages']:
+            logger.info(f"Category filter applied: {len(filtered_df)} reviews")
+        
+        # Language filter
+        if 'All' not in filters['languages'] and filters['languages']:
             filtered_df = filtered_df[filtered_df['language'].isin(filters['languages'])]
+            logger.info(f"Language filter applied: {len(filtered_df)} reviews")
+        
+        # Search query filter
+        search_query = filters.get('search_query', '').strip()
+        if search_query:
+            # Ensure text column is string and handle NaN
+            filtered_df['text'] = filtered_df['text'].astype(str).fillna('')
+            filtered_df = filtered_df[
+                filtered_df['text'].str.lower().str.contains(search_query.lower(), na=False)
+            ]
+            logger.info(f"Search query '{search_query}' applied: {len(filtered_df)} reviews matched")
+        
         return filtered_df
+    
     except Exception as e:
         logger.error(f"Filter reviews error: {e}")
+        st.error(f"Error applying filters: {str(e)}")
         return df.copy()
+        
+        
+def get_top_emotion(df, store_name):
+    # Check for empty dataframe
+    if df.empty:
+        print(f"EMPTY DataFrame for {store_name}")
+        return "N/A"
+    
+    # Check for emotions column
+    if 'emotions' not in df.columns:
+        print(f"NO emotions column in {store_name} data")
+        return "N/A"
+    
+    # Debug info
+    print(f"\n==== EMOTION DEBUG FOR {store_name} ====")
+    print(f"DataFrame shape: {df.shape}")
+    print(f"Store values: {df['store'].unique().tolist()}")
+    
+    emotion_totals = {}
+    processed_count = 0
+    
+    # Process each row
+    for idx, row in df.iterrows():
+        try:
+            emotions_dict = row.get('emotions', {})
+            store_value = row.get('store', 'Unknown')
+            
+            # Print sample rows for debugging
+            if idx < 3 or idx % 50 == 0:  # Print first 3 rows and then every 50th
+                print(f"\nRow {idx}: Store='{store_value}'")
+                print(f"  Emotions type: {type(emotions_dict)}")
+                print(f"  Emotions value: {emotions_dict}")
+            
+            # Handle different emotion data structures
+            if isinstance(emotions_dict, dict) and emotions_dict:
+                emotions_to_process = emotions_dict
+            elif isinstance(emotions_dict, str):
+                try:
+                    import json
+                    emotions_to_process = json.loads(emotions_dict)
+                    print(f"  Converted string to JSON: {emotions_to_process}")
+                except:
+                    print(f"  Failed to parse emotions string: {emotions_dict}")
+                    emotions_to_process = {'neutral': 1.0}
+            else:
+                if idx < 10:  # Limit logging for non-dictionary emotions
+                    print(f"  Non-dictionary emotions: {emotions_dict}")
+                emotions_to_process = {'neutral': 1.0}
+            
+            # Calculate total for normalization
+            total_score = sum(emotions_to_process.values())
+            
+            if total_score > 0:
+                # Process each emotion
+                for emotion, score in emotions_to_process.items():
+                    # Normalize the score
+                    normalized_score = score / total_score
+                    
+                    # Add to totals
+                    if emotion not in emotion_totals:
+                        emotion_totals[emotion] = 0
+                    emotion_totals[emotion] += normalized_score
+                
+                processed_count += 1
+            else:
+                print(f"  Zero total score for emotions: {emotions_to_process}")
+        
+        except Exception as e:
+            print(f"  ERROR processing row {idx}: {e}")
+    
+    # Print summary
+    print(f"\nProcessed {processed_count}/{len(df)} rows with valid emotions")
+    print(f"Raw emotion totals: {emotion_totals}")
+    
+    # Calculate average per review
+    normalized_emotions = {}
+    if processed_count > 0:
+        for emotion, total in emotion_totals.items():
+            normalized_emotions[emotion] = total / processed_count
+    
+    print(f"Normalized emotions: {normalized_emotions}")
+    
+    # Find top emotion
+    top_emotion = "N/A"
+    top_score = 0
+    
+    for emotion, score in normalized_emotions.items():
+        print(f"  {emotion}: {score}")
+        if score > top_score:
+            top_score = score
+            top_emotion = emotion
+    
+    # Capitalize result
+    result = top_emotion.capitalize() if top_emotion != "N/A" else "N/A"
+    print(f"Top emotion for {store_name}: {result} (score: {top_score})")
+    
+    return result
+    
+def get_filtered_df(full_df, store_filter=None):
+    if full_df is None or full_df.empty:
+        logger.warning("get_filtered_df received empty or None DataFrame")
+        return pd.DataFrame()
+    
+    filtered_df = full_df.copy(deep=True)
+    
+    if store_filter:
+        filtered_df = filtered_df[filtered_df['store'] == store_filter]
+        logger.info(f"Filtered for {store_filter}: {len(filtered_df)} reviews")
+    
+    return filtered_df
 
 if __name__ == '__main__':
     main()
+
