@@ -5,7 +5,7 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -65,13 +65,13 @@ def fetch_google_play_reviews(package_name, service_account_json, max_results=50
             packageName=package_name,
             maxResults=max_results,
             startIndex=start_index,
-            translationLanguage='en'
+            translationLanguage='en'  # Request translations to English if available
         )
         
-       
+        # Execute the request
         response = request.execute()
         
-        
+        # Process the response
         reviews_data = response.get('reviews', [])
         processed_reviews = []
         
